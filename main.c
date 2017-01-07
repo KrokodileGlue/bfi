@@ -1,38 +1,37 @@
-#include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <string.h>
-#include <stdarg.h>
+#include <stdio.h>
+#include <time.h>
 
-char* source;
-char* token;
-char* output_path;
-int dump_to_file;
+/* UTILITIES =============================================================== */
+void fatal_error(const char* msg)
+{
+	if (msg)
+		puts(msg);
 
-#define MAX_OUTPUT_SIZE 11000000
-char output_buffer[MAX_OUTPUT_SIZE];
-char* outbuf_ptr = output_buffer;
+	exit(EXIT_FAILURE);
+}
 
 char* load_file(const char* path)
 {
 	char* buf = NULL;
 	FILE* file = fopen(path, "r");
 	
-	if (file != NULL) {
+	if (file) {
 		if (fseek(file, 0L, SEEK_END) == 0) {
 			long len = ftell(file);
 			if (len == -1) return NULL;
-		
+			
 			buf = malloc(len + 1);
 
-			if (fseek(file, 0L, SEEK_SET) != 0) return NULL;
+			if (fseek(file, 0L, SEEK_SET) != 0)
+				return NULL;
 
-			size_t newLen = fread(buf, 1, len, file);
+			size_t new_len = fread(buf, 1, len, file);
 			if (ferror(file) != 0) {
-				fputs("Input file could not be read.", stderr);
-				exit(EXIT_FAILURE);
+				fatal_error("Input file could not be read.\n");
 			} else {
-				buf[newLen++] = '\0';
+				buf[new_len++] = '\0';
 			}
 		}
 		
@@ -42,268 +41,204 @@ char* load_file(const char* path)
 	return buf;
 }
 
-enum {
-	INSTR_SUB,
-	INSTR_ADD,
-	INSTR_SUBPTR,
-	INSTR_ADDPTR,
-	INSTR_PRINT,
-	INSTR_GETKEY,
-	INSTR_CJUMP,
-	INSTR_JUMP,
-	INSTR_CLEAR,
-	INSTR_MUL
-};
-
-#define NUM_KEYWORDS 8
-const char keywords[NUM_KEYWORDS] = "-+<>.,[]"; /* this string is aligned with the enum above */
-int get_instr_type(char a) {
-	int i;
-	for (i = 0; i < NUM_KEYWORDS; i++) /* finds the "type" as an index of the "keywords" string */
-		if (a == keywords[i])
-			return i;
-	return -1;
+void save_file(const char* path, const char* str)
+{
+	FILE* file = fopen(path, "w");
+	
+	if (!file)
+		fatal_error("Could not open output file.\n");
+	
+	fputs(str, file);
+	fclose(file);
 }
 
-struct instruction {
-	int type;
-	int data;
-	int offset;
-};
+#define IS_BF_COMMAND(c)         \
+	(c == '<' || c == '>'    \
+	|| c == '-' || c == '+') \
+	|| c == ',' || c == '.'  \
+	|| c == '[' || c == ']'
 
-struct instruction* tape;
-unsigned int ip = 0;
+char* remove_comments(char* src)
+{
+	char* buf = malloc(strlen(src) + 1);
+	int buf_index = 0;
 
-/*
- * used to get a rough estimate of how many instructions should
- * be allocated.
- */
-int count_commands(const char* input) {
-	int len = strlen(input);
-	int res = 0;
+	char* c = src;
+	while (*c) {
+		if (IS_BF_COMMAND(*c))
+			buf[buf_index++] = *c;
+		c++;
+	}
+
+	buf[buf_index] = 0;
+	free(src);
+
+	return buf;
+}
+
+/* ANALYSIS ================================================================ */
+
+
+/* COMPILATION ============================================================= */
+typedef struct {
+	enum {
+		INSTR_ADD   , INSTR_SUB,
+		INSTR_SUBPTR, INSTR_ADDPTR,
+		INSTR_PUTCH , INSTR_GETCH,
+		INSTR_CJUMP , INSTR_JUMP,
+		INSTR_CLEAR , INSTR_MUL,
+		INSTR_END
+	} type;
+	int data, offset;
+} Instruction;
+Instruction* program;
+
+Instruction make_instruction(int type, int data, int offset)
+{
+	Instruction res;
 	
-	int i;
-	for (i = 0; i < len; i++)
-		if (get_instr_type(input[i]) >= 0) res++;
-	
+	res.type = type;
+	res.data = data;
+	res.offset = offset;
+
 	return res;
 }
 
-/* removes all characters that aren't bf commands */
-void remove_comments() {
-	int num_commands = count_commands(source);
-	int len = strlen(source);
-	char* buf = malloc(num_commands + 1);
-	
-	int i, j = 0;
-	for (i = 0; i < len; i++) {
-		if (get_instr_type(source[i]) >= 0) {
-			buf[j] = source[i];
-			j++;
-		}
-	}
-	buf[j] = '\0';
-	
-	free(source);
-	source = buf;
+char* bf_commands = "+-<>.,[]";
+int command_type(char command)
+{
+	for (int i = 0; i < strlen(bf_commands); i++)
+		if (bf_commands[i] == command)
+			return i;
+
+	return -1;
 }
 
-#define MAX_STACK_DEPTH 2048
-int stack[MAX_STACK_DEPTH];
-int sp = 0;
+#define MAX_STACK_DEPTH 4096
+int stack[MAX_STACK_DEPTH], sp, ip;
+char* tok;
 
-/* The criteria for a loop to be considered a multiplication loop are:
- *  + it must have a balanced set of < and > commands
- *  + it must not contain a nested loop
- *  + it must not contain any commands other than + - < and >
- *  + the first or last command of a mulloop should be a - (but not both)
- */
-int multiplication_loop() {
-	char* begin = token;
-	char* end = token + 1;
-	while (*end != ']') {
-		if (*end == '\0' || get_instr_type(*end) >= 4) return 0;
-		end++;
-	}
-	/* end is now a pointer to the end of the theoretical
-	 * mulloop loop */
-	
-	int num_lptr = 0, num_rptr = 0; /* the count of < and > */
-	char* index;
-	for (index = begin; index <= end; index++) {
-		if (*index == '<') num_lptr++;
-		else if (*index == '>') num_rptr++;
+#define IS_CONTRACTABLE(c)       \
+	(c == '<' || c == '>'    \
+	|| c == '-' || c == '+')
+
+void contract()
+{
+	int type = command_type(*tok), data = 0, temp = type;
+
+	while (temp == type && *tok) {
+		data++, tok++;
+		temp = command_type(*tok);
 	}
 
-	/* every multiplication loop must have a balanced set
-	 * of < and > */
-	if (num_lptr != num_rptr) return 0;
-	
-	if (!(begin[1] == '-') != !(end[-1] == '-')) {
-		/* a multiplication loop has been found! */
+	program[ip++] = make_instruction(type, data, -1);
+}
+
+void compile(char* src)
+{
+	/* in a worst case scenario, none of our optimizations apply,
+	 * and we need an entire Instruction to represent each token */
+	program = malloc(sizeof(Instruction) * strlen(src));
+
+	tok = src;
+	while (*tok) {
+		int type = command_type(*tok);
 		
-		index = begin;
-		int offset = 0;
-		while (index <= end) {
-			if (*index == '>') offset++;
-			else if (*index == '<') offset--;
-			int amount = 0;
-			index++;
-			while (*index == '+' || *index == '-') {
-				if (*index == '+') amount++;
-				else if (*index == '-') amount--;
-				index++;
-			}
-
-			/* dont emit a multiplication command if there
-			 * is no offset... a cell should never be
-			 * multiplied by itself!!! */
-			if (amount != 0 && offset != 0) {
-				tape[ip].type = INSTR_MUL;
-				tape[ip].data = amount;
-				tape[ip].offset = offset;
-				ip++;
-			}
-		}
-	} else {
-		return 0;
-	}
-	
-	token = end + 1;
-	tape[ip].type = INSTR_CLEAR;
-	ip++;
-	
-	return 1;
-}
-
-void contract() {
-	int data = 0;
-	int type = get_instr_type(*token);
-	int temp = type;
-
-	/* + - < and > can be contracted */
-	while (temp == type && *token != '\0') {
-		data++;
-		token++;
-		temp = get_instr_type(*token);
-	}
-	
-	tape[ip].type = type;
-	tape[ip].data = data;
-	ip++;
-}
-
-void compile() {
-	tape = calloc(strlen(source), sizeof(struct instruction));
-	
-	while (*token != '\0') {
-		int type = get_instr_type(*token);
-		int data = 1;
-		if (type == INSTR_CJUMP) {
-			if (multiplication_loop()) {
-				/* continue */
-			} else if (!strncmp(token, "[-]", 3)) {
-				tape[ip].type = INSTR_CLEAR;
-				ip++;
-				token += 3;
+		if (*tok == '[') {
+			if (0) {
+				continue;
+			} else if (!strncmp(tok, "[-]", 3)) {
+				program[ip++] = make_instruction(INSTR_CLEAR, -1, -1);
+				tok += 3;
 			} else {
 				stack[sp++] = ip;
-				tape[ip].type = type;
-				tape[ip].data = data;
-				ip++;
-				token++;
+				program[ip++] = make_instruction(type, -1, -1);
+				tok++;
 			}
-		} else if (type >= 4) { /* handles , . [ and ] (which are noncontractable) */
-			if (type == INSTR_JUMP) {
-				data = stack[--sp];
-				tape[stack[sp]].data = ip;
-			}
-			tape[ip].type = type;
-			tape[ip].data = data;
-			ip++;
-			token++;
-		} else { /* token is of type + - < or > (which are contractable) */
+		} else if (type >= 4) { /* handles , . [ and ] (which are not contractable) */
+			if (*tok == ']') {
+				if (sp == 0) fatal_error("Unmatched ].\n");
+				
+				program[ip] = make_instruction(type, stack[--sp], -1);
+				program[stack[sp]].data = ip++;
+			} else
+				program[ip++] = make_instruction(type, -1, -1);
+			
+			tok++;
+		} else /* token is of type + - < or > */
 			contract();
-		}
 	}
-	
-	tape[ip].type = -1;
+
+	program[ip].type = INSTR_END;
+
+	if (sp)
+		fatal_error("Unmatched [.\n");
 }
 
+/* EXECUTION =============================================================== */
 #define MAX_MEMORY 65536
 char memory[MAX_MEMORY];
-unsigned short ptr = 0;
+unsigned short ptr;
 
-unsigned long long instr_counter = 0;
-void execute() {
+void execute()
+{
 	ip = 0;
-	
-	while (tape[ip].type >= 0) {
-		switch(tape[ip].type) {
-			case INSTR_SUB: memory[ptr] -= tape[ip].data; break;
-			case INSTR_ADD: memory[ptr] += tape[ip].data; break;
-			case INSTR_SUBPTR: ptr -= tape[ip].data; break;
-			case INSTR_ADDPTR: ptr += tape[ip].data; break;
-			case INSTR_PRINT: if (dump_to_file) {*outbuf_ptr++ = memory[ptr];} else {putchar(memory[ptr]);} break;
-			case INSTR_GETKEY: memory[ptr] = getchar(); break;
-			case INSTR_CJUMP: if (!memory[ptr]) ip = tape[ip].data; break;
-			case INSTR_JUMP: ip = tape[ip].data; ip--; break;
-			case INSTR_CLEAR: memory[ptr] = 0; break;
-			case INSTR_MUL: memory[ptr + tape[ip].offset] += memory[ptr] * tape[ip].data; break;
+
+	while (1) {
+		switch (program[ip].type) {
+			case INSTR_ADD   : memory[ptr] += program[ip].data; break;
+			case INSTR_SUB   : memory[ptr] -= program[ip].data; break;
+			case INSTR_SUBPTR: ptr -= program[ip].data;         break;
+			case INSTR_ADDPTR: ptr += program[ip].data;         break;
+			case INSTR_PUTCH : putchar(memory[ptr]);            break;
+			case INSTR_GETCH : memory[ptr] = getchar();         break;
+			case INSTR_CJUMP : if (!memory[ptr]) ip = program[ip].data; break;
+			case INSTR_JUMP  : ip = program[ip].data - 1;       break;
+			case INSTR_CLEAR : memory[ptr] = 0;                 break;
+			case INSTR_MUL   : break;
+			case INSTR_END   : return; break;
 		}
-		
+
 		ip++;
-		instr_counter++;
 	}
 }
 
-int main(int argc, char** argv) {
-	if (argc < 2) {
-		printf("usage: appname [path_of_file_to_run]");
-		exit(EXIT_FAILURE);
-	}
-	
-	int i;
-	for (i = 0; i < argc; i++) {
+int main(int argc, char** argv)
+{
+	char* output_path = NULL, *input_path = NULL;
+	for (int i = 1; i < argc; i++) {
 		if (!strncmp(argv[i], "-o", 2)) {
-			output_path = &argv[i][2];
-			dump_to_file = 1;
+			if (strlen(argv[i]) == 2)
+				fatal_error("Provided output path is too short.\n");
+			else
+				output_path = &argv[i][2];
+		} else {
+			if (input_path)
+				fatal_error("Usage: bfi INPUT_FILE -oOUTPUT_FILE\n");
+
+			input_path = argv[i];
 		}
 	}
+
+	if (!input_path) /* we never recieved an input path */
+		fatal_error("Usage: bfi INPUT_FILE -oOUTPUT_FILE\n");
+
+	char* src = load_file(input_path);
+	src = remove_comments(src);
+
+	compile(src);
 	
-	source = load_file(argv[1]);
-	if (!source) {
-		printf("invalid file: %s\n", argv[1]);
-		exit(EXIT_FAILURE);
-	}
-	
-	remove_comments();
-	token = source;
-	compile();
-	
+#ifdef DEBUG
+	puts("instruction listing:\n");
+	for (int i = 0; i < ip; i++)
+		printf("%d: [%5d][%5d][%5d]\n", i, program[i].type, program[i].data, program[i].offset);
+#endif
+
 	clock_t begin = clock();
-	
 	execute();
-	
 	clock_t end = clock();
 	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-	printf("\nProgram executed %llu instructions in %f seconds.\n", instr_counter, time_spent);
-	
-	if (dump_to_file) {
-		printf("writing output to file %s...\n", output_path);
-		
-		FILE* file = fopen(output_path, "w");
-		if (!file) {
-			printf("error: could not open output file.\n");
-			exit(EXIT_FAILURE);
-		}
-		
-		fprintf(file, "%s", output_buffer);
-		
-		fclose(file);
-	}
-	
-	printf("done.\n");
-	
-    return EXIT_SUCCESS;
+	printf("\nProgram took %f seconds.\n", time_spent);
+
+	return EXIT_SUCCESS;
 }
