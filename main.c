@@ -76,9 +76,6 @@ char* remove_comments(char* src)
 	return buf;
 }
 
-/* ANALYSIS ================================================================ */
-
-
 /* COMPILATION ============================================================= */
 typedef struct {
 	enum {
