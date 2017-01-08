@@ -77,6 +77,21 @@ char* remove_comments(char* src)
 }
 
 /* COMPILATION ============================================================= */
+char instr_strings[12][20] = {
+	"ADD   ",
+	"SUB   ",
+	"SUBPTR",
+	"ADDPTR",
+	"PUTCH ",
+	"GETCH ",
+	"CJUMP ",
+	"JUMP  ",
+	"CLEAR ",
+	"MUL   ",
+	"END   ",
+	"DCLEAR"
+};
+
 typedef struct {
 	enum {
 		INSTR_ADD   , INSTR_SUB,
@@ -84,7 +99,7 @@ typedef struct {
 		INSTR_PUTCH , INSTR_GETCH,
 		INSTR_CJUMP , INSTR_JUMP,
 		INSTR_CLEAR , INSTR_MUL,
-		INSTR_END
+		INSTR_END   , INSTR_DCLEAR /* dangerous clear*/
 	} type;
 	int data, offset;
 } Instruction;
@@ -119,6 +134,156 @@ char* tok;
 	(c == '<' || c == '>'    \
 	|| c == '-' || c == '+')
 
+/* takes a pointer to the beginning and end of a piece of text
+ * and turns it into an independant NUL-terminated string */
+char* form_string(char* begin, char* end)
+{
+	char* str = malloc(end - begin + 15);
+	strncpy(str, begin, end - begin + 1);
+	str[end - begin + 1] = 0;
+
+	return str;
+}
+
+int balanced_loop(const char* loop)
+{
+	int offset = 0;
+	for (int i = 0; i < strlen(loop); i++) {
+		if (loop[i] == '<')      offset--;
+		else if (loop[i] == '>') offset++;
+	}
+
+	return !offset;
+}
+
+typedef struct {
+	int offset, data;
+} LoopCellInformation;
+
+typedef struct {
+	LoopCellInformation* loop;
+	int num;
+} LoopInfo;
+
+int find_cell_with_offset(LoopCellInformation* cells, int num_cells, int offset)
+{
+	for (int i = 0; i < num_cells; i++)
+		if (cells[i].offset == offset)
+			return i;
+
+	return -1;
+}
+
+int emit_multiplication_loops(LoopInfo* loop_info)
+{
+	int index_of_main_cell = find_cell_with_offset(loop_info->loop, loop_info->num, 0);
+	if (loop_info->loop[index_of_main_cell].data != -1)
+		return 0;
+
+	for (int i = 0; i < loop_info->num; i++) {
+		if (i != index_of_main_cell) {
+			program[ip++] = make_instruction(
+			INSTR_MUL,
+			loop_info->loop[i].data,
+			loop_info->loop[i].offset);
+		}
+	}
+
+	program[ip++] = make_instruction(INSTR_CLEAR, -1, -1);
+
+	return 1;
+}
+
+LoopInfo* analyze_loop(const char* loop)
+{
+	LoopCellInformation* cells = malloc(strlen(loop) * sizeof(LoopCellInformation));
+	int num_cells = 0, offset = 0, amount = 0;
+
+	int i = 1;
+	while (loop[i] != ']') {
+		while (loop[i] == '<' || loop[i] == '>') {
+			if (loop[i] == '<') offset--;
+			else offset++;
+
+			i++;
+		}
+
+		amount = 0;
+		while (loop[i] == '+' || loop[i] == '-') {
+			if (loop[i] == '+') amount++;
+			else amount--;
+
+			i++;
+		}
+
+		int cell_index = find_cell_with_offset(cells, num_cells, offset);
+		if (cell_index != -1) {
+			cells[cell_index].data += amount;
+		} else {
+			cells[num_cells].data = amount;
+			cells[num_cells++].offset = offset;
+		}
+	}
+
+#ifdef DEBUG
+	printf("loop: %s\nloop anaylsis:\n", loop);
+	for (int j = 0; j < num_cells; j++) {
+		printf("\toffset: [%4d] data: [%4d]\n", cells[j].offset, cells[j].data);
+	}
+#endif
+
+	LoopInfo* res = malloc(sizeof(LoopInfo));
+	res->loop = cells;
+	res->num = num_cells;
+
+	return res;
+}
+
+int muliplication_loop()
+{
+	char *begin = tok, *end = tok + 1;
+
+	if (!strncmp(begin, "[-]", 3))
+		return 0;
+
+	while (*end != ']') {
+		if (*end == '\0' || command_type(*end) >= 4)
+			return 0;
+		end++;
+	}
+
+	/* if we've reached this point then the loop does not contain
+	 * any embedded loops or commands other than + - < and > */
+	
+	char* loop = form_string(begin, end);
+	if (!balanced_loop(loop)) {
+		free(loop);
+		return 0;
+	}
+
+	/* if we've reached this point then the loop is balanced. */
+	LoopInfo* loop_info = analyze_loop(loop);
+
+#ifdef DEBUG
+	printf("\tloop passed as multiplication loop? ");
+#endif
+
+	if (emit_multiplication_loops(loop_info)) {
+#ifdef DEBUG
+		printf("yes\n");
+#endif
+		tok = end + 1;
+		free(loop);
+		return 1;
+	} else {
+#ifdef DEBUG
+		printf("no\n");
+#endif
+		free(loop);
+		return 0;
+	}
+}
+
 void contract()
 {
 	int type = command_type(*tok), data = 0, temp = type;
@@ -129,6 +294,32 @@ void contract()
 	}
 
 	program[ip++] = make_instruction(type, data, -1);
+}
+
+int is_clearloop()
+{
+	if (!strncmp(tok, "[-]", 3) || !strncmp(tok, "[+]", 3)) {
+		program[ip++] = make_instruction(INSTR_CLEAR, -1, -1);
+		tok += 3;
+		return 1;
+	}
+
+	int data = 0;
+	char* c = tok + 1;
+	while (*c != ']') {
+		if (*c != '+' && *c != '-') {
+			printf("%c broke the thing\n", *c);
+			return 0;
+		}
+
+		data++;
+		c++;
+	}
+
+	program[ip++] = make_instruction(INSTR_DCLEAR, data, -1);
+	tok = c + 1;
+
+	return 1;
 }
 
 void compile(char* src)
@@ -142,19 +333,19 @@ void compile(char* src)
 		int type = command_type(*tok);
 		
 		if (*tok == '[') {
-			if (0) {
+			if (muliplication_loop()) {
 				continue;
-			} else if (!strncmp(tok, "[-]", 3)) {
-				program[ip++] = make_instruction(INSTR_CLEAR, -1, -1);
-				tok += 3;
+			} else if (is_clearloop()) {
+				continue;
 			} else {
 				stack[sp++] = ip;
 				program[ip++] = make_instruction(type, -1, -1);
 				tok++;
 			}
-		} else if (type >= 4) { /* handles , . [ and ] (which are not contractable) */
+		} else if (type >= 6) { /* handles [ and ] (which are not contractable) */
 			if (*tok == ']') {
-				if (sp == 0) fatal_error("Unmatched ].\n");
+				if (sp == 0)
+					fatal_error("Unmatched ].\n");
 				
 				program[ip] = make_instruction(type, stack[--sp], -1);
 				program[stack[sp]].data = ip++;
@@ -187,13 +378,18 @@ void execute()
 			case INSTR_SUB   : memory[ptr] -= program[ip].data; break;
 			case INSTR_SUBPTR: ptr -= program[ip].data;         break;
 			case INSTR_ADDPTR: ptr += program[ip].data;         break;
-			case INSTR_PUTCH : putchar(memory[ptr]);            break;
+			case INSTR_PUTCH : for (int i = 0; i < program[ip].data; i++) putchar(memory[ptr]); break;
 			case INSTR_GETCH : memory[ptr] = getchar();         break;
 			case INSTR_CJUMP : if (!memory[ptr]) ip = program[ip].data; break;
 			case INSTR_JUMP  : ip = program[ip].data - 1;       break;
 			case INSTR_CLEAR : memory[ptr] = 0;                 break;
-			case INSTR_MUL   : break;
-			case INSTR_END   : return; break;
+			case INSTR_MUL   : memory[ptr + program[ip].offset] += memory[ptr] * program[ip].data; break;
+			case INSTR_END   : return;
+			case INSTR_DCLEAR:
+				if (program[ip].data % 3 == 0) memory[ptr] = 0;
+				else if ((program[ip].data / 2 % 2 == 0) && (memory[ptr] / 2 % 2 == 0)) memory[ptr] = 0;
+				else { printf("\nbfi: program has entered an infinite loop.\n"); return; }
+				break;
 		}
 
 		ip++;
@@ -226,9 +422,10 @@ int main(int argc, char** argv)
 	compile(src);
 	
 #ifdef DEBUG
-	puts("instruction listing:\n");
+	printf("instruction listing:\n");
 	for (int i = 0; i < ip; i++)
-		printf("%d: [%5d][%5d][%5d]\n", i, program[i].type, program[i].data, program[i].offset);
+		printf("%d: [%s][%5d][%5d]\n", i, instr_strings[program[i].type], program[i].offset, program[i].data);
+	printf("program output:\n");
 #endif
 
 	clock_t begin = clock();
