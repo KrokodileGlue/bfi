@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <time.h>
 
+/* TODO:
+ * check for NULL when loading files
+ * remove output stuff */
+
 /* UTILITIES =============================================================== */
 void fatal_error(const char* msg)
 {
@@ -129,10 +133,6 @@ int command_type(char command)
 #define MAX_STACK_DEPTH 4096
 int stack[MAX_STACK_DEPTH], sp, ip;
 char* tok;
-
-#define IS_CONTRACTABLE(c)       \
-	(c == '<' || c == '>'    \
-	|| c == '-' || c == '+')
 
 /* takes a pointer to the beginning and end of a piece of text
  * and turns it into an independant NUL-terminated string */
@@ -284,16 +284,49 @@ int muliplication_loop()
 	}
 }
 
+#define IS_CONTRACTABLE(c)      \
+	(c == '<' || c == '>'   \
+	|| c == '-' || c == '+' \
+	|| c == ',' || c == '.')
+
 void contract()
 {
-	int type = command_type(*tok), data = 0, temp = type;
+	int type = command_type(*tok), data = 0, temp = type, offset = 0;
 
-	while (temp == type && *tok) {
-		data++, tok++;
-		temp = command_type(*tok);
+	while (IS_CONTRACTABLE(*tok)) {
+		data = 0;
+
+		while (*tok == '<' || *tok == '>') {
+			if (*tok == '<') offset--;
+			else offset++;
+			
+			tok++;
+		}
+
+		if (*tok == '-' || *tok == '+') {
+			while (*tok == '-' || *tok == '+') {
+				if (*tok == '-') data--;
+				else data++;
+				
+				tok++;
+			}
+
+			program[ip++] = make_instruction(INSTR_ADD, data, offset);
+		} else if (*tok == ',') {
+			while (*tok == ',')
+				data++, tok++;
+
+			program[ip++] = make_instruction(INSTR_GETCH, data, offset);
+		} else if (*tok == '.') {
+			while (*tok == '.')
+				data++, tok++;
+
+			program[ip++] = make_instruction(INSTR_PUTCH, data, offset);
+		}
 	}
 
-	program[ip++] = make_instruction(type, data, -1);
+	if (offset)
+		program[ip++] = make_instruction(INSTR_ADDPTR, offset, -1);
 }
 
 int is_clearloop()
@@ -307,10 +340,8 @@ int is_clearloop()
 	int data = 0;
 	char* c = tok + 1;
 	while (*c != ']') {
-		if (*c != '+' && *c != '-') {
-			printf("%c broke the thing\n", *c);
+		if (*c != '+' && *c != '-')
 			return 0;
-		}
 
 		data++;
 		c++;
@@ -353,7 +384,7 @@ void compile(char* src)
 				program[ip++] = make_instruction(type, -1, -1);
 			
 			tok++;
-		} else /* token is of type + - < or > */
+		} else /* token is of type + - , . < or > */
 			contract();
 	}
 
@@ -374,12 +405,12 @@ void execute()
 
 	while (1) {
 		switch (program[ip].type) {
-			case INSTR_ADD   : memory[ptr] += program[ip].data; break;
-			case INSTR_SUB   : memory[ptr] -= program[ip].data; break;
+			case INSTR_ADD   : memory[ptr + program[ip].offset] += program[ip].data; break;
+			case INSTR_SUB   : memory[ptr + program[ip].offset] -= program[ip].data; break;
 			case INSTR_SUBPTR: ptr -= program[ip].data;         break;
 			case INSTR_ADDPTR: ptr += program[ip].data;         break;
-			case INSTR_PUTCH : for (int i = 0; i < program[ip].data; i++) putchar(memory[ptr]); break;
-			case INSTR_GETCH : memory[ptr] = getchar();         break;
+			case INSTR_PUTCH : for (int i = 0; i < program[ip].data; i++) putchar(memory[ptr + program[ip].offset]); break;
+			case INSTR_GETCH : memory[ptr + program[ip].offset] = getchar();         break;
 			case INSTR_CJUMP : if (!memory[ptr]) ip = program[ip].data; break;
 			case INSTR_JUMP  : ip = program[ip].data - 1;       break;
 			case INSTR_CLEAR : memory[ptr] = 0;                 break;
