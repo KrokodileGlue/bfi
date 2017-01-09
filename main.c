@@ -64,6 +64,7 @@ char* remove_comments(char* src)
 	}
 
 	buf[buf_index] = 0;
+	buf = realloc(buf, strlen(buf) + 1);
 	free(src);
 
 	return buf;
@@ -179,6 +180,9 @@ int emit_multiplication_loops(LoopInfo* loop_info)
 	}
 
 	program[ip++] = make_instruction(INSTR_CLEAR, -1, -1);
+	
+	free(loop_info->loop);
+	free(loop_info);
 
 	return 1;
 }
@@ -391,6 +395,12 @@ void compile(char* src)
 	}
 
 	program[ip].type = INSTR_END;
+	//printf("allocating %lu bytes for %d instructions\n", sizeof(Instruction) * ip, ip);
+
+	/* valgrind is reporting reads to data that is allocated here?
+	 * only enough space for ip + 1 should be required, but the padding
+	 * of 16 bytes fixes it. */
+	program = realloc(program, sizeof(Instruction) * ip + 16);
 
 	if (sp)
 		fatal_error("Unmatched [.\n");
@@ -469,6 +479,7 @@ int main(int argc, char** argv)
 	src = remove_comments(src);
 
 	compile(src);
+	free(src);
 	
 #ifdef DEBUG
 	printf("instruction listing:\n");
@@ -479,6 +490,7 @@ int main(int argc, char** argv)
 
 	clock_t begin = clock();
 	execute();
+	free(program);
 	clock_t end = clock();
 	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
 	if (print_time)
