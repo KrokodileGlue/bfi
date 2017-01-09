@@ -410,7 +410,7 @@ void compile(char* src)
 /* EXECUTION =============================================================== */
 #define MAX_MEMORY 65536
 char memory[MAX_MEMORY];
-unsigned short ptr;
+unsigned short ptr; /* free memory wrapping */
 
 void execute()
 {
@@ -456,12 +456,16 @@ void execute()
 int main(int argc, char** argv)
 {
 	char* output_path = NULL, *input_path = NULL;
+	int print_time = 0;
+	
 	for (int i = 1; i < argc; i++) {
 		if (!strncmp(argv[i], "-o", 2)) {
 			if (strlen(argv[i]) == 2)
 				fatal_error("Provided output path is too short.\n");
 			else
 				output_path = &argv[i][2];
+		} else if (!strcmp(argv[i], "-t")) {
+			print_time = 1;
 		} else {
 			if (input_path)
 				fatal_error("Usage: bfi INPUT_FILE -oOUTPUT_FILE\n");
@@ -489,7 +493,8 @@ int main(int argc, char** argv)
 	execute();
 	clock_t end = clock();
 	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-	printf("\nProgram used %f seconds of processor time.\n", time_spent);
+	if (print_time)
+		printf("\nProgram used %f seconds of processor time.\n", time_spent);
 
 	return EXIT_SUCCESS;
 }
