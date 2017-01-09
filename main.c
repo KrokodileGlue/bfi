@@ -3,10 +3,6 @@
 #include <stdio.h>
 #include <time.h>
 
-/* TODO:
- * check for NULL when loading files
- * remove output stuff */
-
 /* UTILITIES =============================================================== */
 void fatal_error(const char* msg)
 {
@@ -394,13 +390,10 @@ void compile(char* src)
 			contract();
 	}
 
-	program[ip].type = INSTR_END;
+	program[ip++].type = INSTR_END;
 	//printf("allocating %lu bytes for %d instructions\n", sizeof(Instruction) * ip, ip);
-
-	/* valgrind is reporting reads to data that is allocated here?
-	 * only enough space for ip + 1 should be required, but the padding
-	 * of 16 bytes fixes it. */
-	program = realloc(program, sizeof(Instruction) * ip + 16);
+	
+	program = realloc(program, sizeof(Instruction) * ip);
 
 	if (sp)
 		fatal_error("Unmatched [.\n");
