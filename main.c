@@ -298,9 +298,7 @@ void contract()
 
 		while (*tok == '<' || *tok == '>') {
 			if (*tok == '<') offset--;
-			else offset++;
-			
-			tok++;
+			else offset++; tok++;
 		}
 
 		if (*tok == '-' || *tok == '+') {
@@ -312,16 +310,31 @@ void contract()
 			}
 
 			program[ip++] = make_instruction(INSTR_ADD, data, offset);
+
+			while (*tok == '<' || *tok == '>') {
+				if (*tok == '<') offset--;
+				else offset++; tok++;
+			}
 		} else if (*tok == ',') {
 			while (*tok == ',')
 				data++, tok++;
 
 			program[ip++] = make_instruction(INSTR_GETCH, data, offset);
+
+			while (*tok == '<' || *tok == '>') {
+				if (*tok == '<') offset--;
+				else offset++; tok++;
+			}
 		} else if (*tok == '.') {
 			while (*tok == '.')
 				data++, tok++;
 
 			program[ip++] = make_instruction(INSTR_PUTCH, data, offset);
+
+			while (*tok == '<' || *tok == '>') {
+				if (*tok == '<') offset--;
+				else offset++; tok++;
+			}
 		}
 	}
 
@@ -405,16 +418,16 @@ void execute()
 
 	while (1) {
 		switch (program[ip].type) {
-			case INSTR_ADD   : memory[ptr + program[ip].offset] += program[ip].data; break;
-			case INSTR_SUB   : memory[ptr + program[ip].offset] -= program[ip].data; break;
+			case INSTR_ADD   : memory[(unsigned short)(ptr + program[ip].offset)] += program[ip].data; break;
+			case INSTR_SUB   : memory[(unsigned short)(ptr + program[ip].offset)] -= program[ip].data; break;
 			case INSTR_SUBPTR: ptr -= program[ip].data;         break;
 			case INSTR_ADDPTR: ptr += program[ip].data;         break;
-			case INSTR_PUTCH : for (int i = 0; i < program[ip].data; i++) putchar(memory[ptr + program[ip].offset]); break;
-			case INSTR_GETCH : memory[ptr + program[ip].offset] = getchar();         break;
+			case INSTR_PUTCH : for (int i = 0; i < program[ip].data; i++) putchar(memory[(unsigned short)(ptr + program[ip].offset)]); break;
+			case INSTR_GETCH : memory[(unsigned short)(ptr + program[ip].offset)] = getchar();         break;
 			case INSTR_CJUMP : if (!memory[ptr]) ip = program[ip].data; break;
 			case INSTR_JUMP  : ip = program[ip].data - 1;       break;
 			case INSTR_CLEAR : memory[ptr] = 0;                 break;
-			case INSTR_MUL   : memory[ptr + program[ip].offset] += memory[ptr] * program[ip].data; break;
+			case INSTR_MUL   : memory[(unsigned short)(ptr + program[ip].offset)] += memory[ptr] * program[ip].data; break;
 			case INSTR_END   : return;
 			case INSTR_DCLEAR:
 				if (program[ip].data % 3 == 0) memory[ptr] = 0;
@@ -463,7 +476,7 @@ int main(int argc, char** argv)
 	execute();
 	clock_t end = clock();
 	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-	printf("\nProgram took %f seconds.\n", time_spent);
+	printf("\nProgram used %f seconds of processor time.\n", time_spent);
 
 	return EXIT_SUCCESS;
 }
