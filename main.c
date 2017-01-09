@@ -45,17 +45,6 @@ char* load_file(const char* path)
 	return buf;
 }
 
-void save_file(const char* path, const char* str)
-{
-	FILE* file = fopen(path, "w");
-	
-	if (!file)
-		fatal_error("Could not open output file.\n");
-	
-	fputs(str, file);
-	fclose(file);
-}
-
 #define IS_BF_COMMAND(c)         \
 	(c == '<' || c == '>'    \
 	|| c == '-' || c == '+') \
@@ -123,7 +112,7 @@ Instruction make_instruction(int type, int data, int offset)
 char* bf_commands = "+-<>.,[]";
 int command_type(char command)
 {
-	for (int i = 0; i < strlen(bf_commands); i++)
+	for (int i = 0; i < (int)strlen(bf_commands); i++)
 		if (bf_commands[i] == command)
 			return i;
 
@@ -148,7 +137,7 @@ char* form_string(char* begin, char* end)
 int balanced_loop(const char* loop)
 {
 	int offset = 0;
-	for (int i = 0; i < strlen(loop); i++) {
+	for (int i = 0; i < (int)strlen(loop); i++) {
 		if (loop[i] == '<')      offset--;
 		else if (loop[i] == '>') offset++;
 	}
@@ -291,7 +280,7 @@ int muliplication_loop()
 
 void contract()
 {
-	int type = command_type(*tok), data = 0, temp = type, offset = 0;
+	int data = 0, offset = 0;
 
 	while (IS_CONTRACTABLE(*tok)) {
 		data = 0;
@@ -455,18 +444,13 @@ void execute()
 
 int main(int argc, char** argv)
 {
-	char* output_path = NULL, *input_path = NULL;
+	char *input_path = NULL;
 	int print_time = 0;
 	
 	for (int i = 1; i < argc; i++) {
-		if (!strncmp(argv[i], "-o", 2)) {
-			if (strlen(argv[i]) == 2)
-				fatal_error("Provided output path is too short.\n");
-			else
-				output_path = &argv[i][2];
-		} else if (!strcmp(argv[i], "-t")) {
+		if (!strcmp(argv[i], "-t"))
 			print_time = 1;
-		} else {
+		else {
 			if (input_path)
 				fatal_error("Usage: bfi INPUT_FILE -oOUTPUT_FILE\n");
 
@@ -478,6 +462,10 @@ int main(int argc, char** argv)
 		fatal_error("Usage: bfi INPUT_FILE -oOUTPUT_FILE\n");
 
 	char* src = load_file(input_path);
+
+	if (!src)
+		fatal_error("could not load file.\n");
+
 	src = remove_comments(src);
 
 	compile(src);
