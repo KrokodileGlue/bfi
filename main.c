@@ -12,6 +12,26 @@ void fatal_error(const char* msg)
 	exit(EXIT_FAILURE);
 }
 
+void *bfi_malloc(size_t bytes)
+{
+	void *res = malloc(bytes);
+	
+	if (!res)
+		fatal_error("out of memory.");
+
+	return res;
+}
+
+void *bfi_realloc(void *block, size_t bytes)
+{
+	block = realloc(block, bytes);
+	
+	if (!block)
+		fatal_error("out of memory.");
+
+	return block;
+}
+
 char* load_file(const char* path)
 {
 	char* buf = NULL;
@@ -22,7 +42,7 @@ char* load_file(const char* path)
 			long len = ftell(file);
 			if (len == -1) return NULL;
 			
-			buf = malloc(len + 1);
+			buf = bfi_malloc(len + 1);
 
 			if (fseek(file, 0L, SEEK_SET) != 0)
 				return NULL;
@@ -49,7 +69,7 @@ char* load_file(const char* path)
 
 char* remove_comments(char* src)
 {
-	char* buf = malloc(strlen(src) + 1);
+	char* buf = bfi_malloc(strlen(src) + 1);
 	int buf_index = 0;
 
 	char* c = src;
@@ -60,10 +80,159 @@ char* remove_comments(char* src)
 	}
 
 	buf[buf_index] = 0;
-	buf = realloc(buf, strlen(buf) + 1);
+	buf = bfi_realloc(buf, strlen(buf) + 1);
 	free(src);
 
 	return buf;
+}
+
+/* SANITIZATION ============================================================ */
+#define SKIP_COMMENTS(c)                              \
+        do {                                          \
+                while (!IS_BF_COMMAND(*c) && *c) c++; \
+        } while (0);
+
+#define OUT_GROWTH_RATE 4096
+char *sanitized = NULL;
+int out_index = 0, out_allocated = 0;
+
+void reset_emit()
+{
+	if (sanitized)
+		free(sanitized);
+	
+	sanitized = bfi_malloc(128);
+	out_allocated = 128;
+	out_index = 0;
+	
+	sanitized[0] = '\0';
+}
+
+void emit(const char* out)
+{
+	if (!sanitized)
+		reset_emit();
+	
+	int bytes_needed = strlen(out) + out_index + 1;
+	if (bytes_needed >= 0) {
+		sanitized = bfi_realloc(sanitized, bytes_needed + OUT_GROWTH_RATE);
+		out_allocated = out_allocated + bytes_needed + OUT_GROWTH_RATE;
+	}
+	
+	strcpy(&sanitized[out_index], out);
+	out_index += strlen(out);
+}
+
+void emit_char(char c)
+{
+	char buf[2] = { 104, '\0' };
+	buf[0] = c;
+	
+	emit(buf);
+}
+
+void move_pointer(int distance)
+{
+	char* buf = bfi_malloc(abs(distance) + 1);
+	
+	int i;
+	if (distance >= 0)
+		for (i = 0; i < distance; i++)
+			buf[i] = '>';
+	else
+		for (i = 0; i < -distance; i++)
+			buf[i] = '<';
+	
+	buf[abs(distance)] = '\0';
+	
+	emit(buf);
+	free(buf);
+}
+
+void add(int amount)
+{
+	char* buf = bfi_malloc(abs(amount) + 1);
+	
+	int i;
+	if (amount >= 0)
+		for (i = 0; i < amount; i++)
+			buf[i] = '+';
+	else
+		for (i = 0; i < -amount; i++)
+			buf[i] = '-';
+	
+	buf[abs(amount)] = '\0';
+	
+	emit(buf);
+	free(buf);
+}
+
+char* scrub_movements(char* c)
+{
+	int sum = 0;
+	
+	if (*c == '+' || *c == '-') {
+		while (*c == '+' || *c == '-') {
+			if (*c == '+') sum++;
+			else sum--;
+			
+			c++;
+		}
+		
+		add(sum);
+	} else {
+		while (*c == '<' || *c == '>') {
+			if (*c == '<') sum--;
+			else sum++;
+			
+			c++;
+		}
+		
+		move_pointer(sum);
+	}
+	
+	return c;
+}
+
+char* scrub_block(char* c)
+{
+	int depth = 1;
+	c++;
+	
+	while (depth > 0 && *c) {
+		if (*c == '[') depth++;
+		else if (*c == ']') depth--;
+		c++;
+	}
+
+	return c;
+}
+
+#define CAN_BE_CANCELLED(c) ( \
+    c == '<' || c == '>'      \
+    || c == '+' || c == '-')
+
+int sanitize(char* str)
+{
+	reset_emit();
+	int str_len = strlen(str);
+	
+	char* c = str;
+	while (*c != '\0') {
+		if (CAN_BE_CANCELLED(*c)) {
+			c = scrub_movements(c);
+		} else if (*c == ']') {
+			while (*c == ']') {
+				emit_char(*c++);
+			}
+
+			if (*c == '[')
+				c = scrub_block(c);
+		} else
+			emit_char(*c++);
+	}
+
+	return str_len - strlen(sanitized);
 }
 
 /* COMPILATION ============================================================= */
@@ -124,7 +293,7 @@ char* tok;
  * and turns it into an independant NUL-terminated string */
 char* form_string(char* begin, char* end)
 {
-	char* str = malloc(end - begin + 15);
+	char* str = bfi_malloc(end - begin + 15);
 	strncpy(str, begin, end - begin + 1);
 	str[end - begin + 1] = 0;
 
@@ -185,7 +354,7 @@ int emit_multiplication_loops(LoopInfo* loop_info)
 
 LoopInfo* analyze_loop(const char* loop)
 {
-	LoopCellInformation* cells = malloc(strlen(loop) * sizeof(LoopCellInformation));
+	LoopCellInformation* cells = bfi_malloc(strlen(loop) * sizeof(LoopCellInformation));
 	int num_cells = 0, offset = 0, amount = 0;
 
 	int i = 1;
@@ -221,7 +390,7 @@ LoopInfo* analyze_loop(const char* loop)
 	}
 #endif
 
-	LoopInfo* res = malloc(sizeof(LoopInfo));
+	LoopInfo* res = bfi_malloc(sizeof(LoopInfo));
 	res->loop = cells;
 	res->num = num_cells;
 
@@ -359,7 +528,7 @@ void compile(char* src)
 {
 	/* in a worst case scenario, none of our optimizations apply,
 	 * and we need an entire Instruction to represent each token */
-	program = malloc(sizeof(Instruction) * strlen(src));
+	program = bfi_malloc(sizeof(Instruction) * strlen(src));
 
 	tok = src;
 	while (*tok) {
@@ -393,7 +562,7 @@ void compile(char* src)
 	program[ip++].type = INSTR_END;
 	//printf("allocating %lu bytes for %d instructions\n", sizeof(Instruction) * ip, ip);
 	
-	program = realloc(program, sizeof(Instruction) * ip);
+	program = bfi_realloc(program, sizeof(Instruction) * ip);
 
 	if (sp)
 		fatal_error("Unmatched [.\n");
@@ -404,6 +573,11 @@ void compile(char* src)
 char memory[MAX_MEMORY];
 unsigned short ptr; /* free memory wrapping */
 
+/* borrowed from https://github.com/rdebath/Brainfuck/blob/master/bf2any/bf2run.c */
+#if defined(__GNUC__) && ((__GNUC__>4) || (__GNUC__==4 && __GNUC_MINOR__>=4))
+/* Tell GNU C to think really hard about this function! */
+__attribute__((optimize(3),hot,aligned(64)))
+#endif
 void execute()
 {
 	ip = 0;
@@ -470,6 +644,12 @@ int main(int argc, char** argv)
 		fatal_error("could not load file.\n");
 
 	src = remove_comments(src);
+	
+	while (sanitize(src)) {
+		strcpy(src, sanitized);
+		free(sanitized);
+		sanitized = NULL;
+	}
 
 	compile(src);
 	free(src);
