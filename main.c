@@ -12,7 +12,7 @@ void fatal_error(const char* msg)
 	exit(EXIT_FAILURE);
 }
 
-void *bfi_malloc(size_t bytes)
+void* bfi_malloc(size_t bytes)
 {
 	void *res = malloc(bytes);
 	
@@ -22,7 +22,7 @@ void *bfi_malloc(size_t bytes)
 	return res;
 }
 
-void *bfi_realloc(void *block, size_t bytes)
+void* bfi_realloc(void *block, size_t bytes)
 {
 	block = realloc(block, bytes);
 	
@@ -86,156 +86,92 @@ char* remove_comments(char* src)
 	return buf;
 }
 
-/* SANITIZATION ============================================================ */
-#define SKIP_COMMENTS(c)                              \
-        do {                                          \
-                while (!IS_BF_COMMAND(*c) && *c) c++; \
-        } while (0);
-
-#define OUT_GROWTH_RATE 4096
-char *sanitized = NULL;
-int out_index = 0, out_allocated = 0;
-
-void reset_emit()
+void sanitize(char* str)
 {
-	if (sanitized)
-		free(sanitized);
-	
-	sanitized = bfi_malloc(128);
-	out_allocated = 128;
-	out_index = 0;
-	
-	sanitized[0] = '\0';
-}
+#define SANITIZER_IS_BF_COMMAND(c) (   \
+        c == '<' || c == '>'     \
+        || c == '+' || c == '-'  \
+        || c == '[' || c == ']'  \
+        || c == ',' || c == '.')
 
-void emit(const char* out)
-{
-	if (!sanitized)
-		reset_emit();
-	
-	int bytes_needed = strlen(out) + out_index + 1;
-	if (bytes_needed >= 0) {
-		sanitized = bfi_realloc(sanitized, bytes_needed + OUT_GROWTH_RATE);
-		out_allocated = out_allocated + bytes_needed + OUT_GROWTH_RATE;
-	}
-	
-	strcpy(&sanitized[out_index], out);
-	out_index += strlen(out);
-}
+#define SANITIZER_ADD(a, c) \
+        if (a >= 0) { \
+                for (int counter = 0; counter < abs(a); counter++) { \
+                        *c++ = '+'; \
+                } \
+        } else { \
+    	        for (int counter = 0; counter < abs(a); counter++) { \
+                        *c++ = '-'; \
+                } \
+        }
 
-void emit_char(char c)
-{
-	char buf[2] = { 104, '\0' };
-	buf[0] = c;
-	
-	emit(buf);
-}
+#define SANITIZER_MOVE_PTR(a, c) \
+    if (a >= 0) { \
+        for (int counter = 0; counter < abs(a); counter++) { \
+            *c++ = '>'; \
+        } \
+    } else { \
+    	for (int counter = 0; counter < abs(a); counter++) { \
+            *c++ = '<'; \
+        } \
+    }
 
-void move_pointer(int distance)
-{
-	char* buf = bfi_malloc(abs(distance) + 1);
-	
-	int i;
-	if (distance >= 0)
-		for (i = 0; i < distance; i++)
-			buf[i] = '>';
-	else
-		for (i = 0; i < -distance; i++)
-			buf[i] = '<';
-	
-	buf[abs(distance)] = '\0';
-	
-	emit(buf);
-	free(buf);
-}
+#define SANITIZER_IS_CONTRACTABLE(c) (     \
+        c == '<' || c == '>'     \
+        || c == '+' || c == '-')
 
-void add(int amount)
-{
-	char* buf = bfi_malloc(abs(amount) + 1);
-	
-	int i;
-	if (amount >= 0)
-		for (i = 0; i < amount; i++)
-			buf[i] = '+';
-	else
-		for (i = 0; i < -amount; i++)
-			buf[i] = '-';
-	
-	buf[abs(amount)] = '\0';
-	
-	emit(buf);
-	free(buf);
-}
+	char* buf = malloc(strlen(str) + 1);
 
-char* scrub_movements(char* c)
-{
-	int sum = 0;
-	
-	if (*c == '+' || *c == '-') {
-		while (*c == '+' || *c == '-') {
-			if (*c == '+') sum++;
-			else sum--;
-			
-			c++;
-		}
-		
-		add(sum);
-	} else {
-		while (*c == '<' || *c == '>') {
-			if (*c == '<') sum--;
-			else sum++;
-			
-			c++;
-		}
-		
-		move_pointer(sum);
-	}
-	
-	return c;
-}
+	size_t starting_len;
+	char* i, *out;
 
-char* scrub_block(char* c)
-{
-	int depth = 1;
-	c++;
-	
-	while (depth > 0 && *c) {
-		if (*c == '[') depth++;
-		else if (*c == ']') depth--;
-		c++;
-	}
+	starting_len = strlen(str);
+	i = str, out = buf;
 
-	return c;
-}
-
-#define CAN_BE_CANCELLED(c) ( \
-    c == '<' || c == '>'      \
-    || c == '+' || c == '-')
-
-int sanitize(char* str)
-{
-	reset_emit();
-	int str_len = strlen(str);
-	
-	char* c = str;
-	while (*c != '\0') {
-		if (CAN_BE_CANCELLED(*c)) {
-			c = scrub_movements(c);
-		} else if (*c == ']') {
-			while (*c == ']') {
-				emit_char(*c++);
+	while (*i != '\0') {
+		if (SANITIZER_IS_CONTRACTABLE(*i)) {
+			if (*i == '+' || *i == '-') {
+				int sum = 0;
+				while (*i == '+' || *i == '-') {
+					if (*i == '+') sum++;
+					else sum--;
+					i++;
+				}
+				SANITIZER_ADD(sum, out)
+			} else {
+				int sum = 0;
+				while (*i == '>' || *i == '<') {
+					if (*i == '>') sum++;
+					else sum--;
+					i++;
+				}
+				SANITIZER_MOVE_PTR(sum, out)
 			}
-
-			if (*c == '[')
-				c = scrub_block(c);
-		} else
-			emit_char(*c++);
+		} else if (!strncmp(i, "][", 2)) {
+			i += 2;
+			int depth = 1;
+			while (*i != '\0' && depth) {
+				if (*i == '[') depth++;
+				else if (*i == ']') depth--;
+				i++;
+			}
+			i--;
+		} else if (SANITIZER_IS_BF_COMMAND(*i)) {
+			*out++ = *i++;
+		} else {
+			i++;
+		}
 	}
+	*out = '\0';
+	strcpy(str, buf);
 
-	return str_len - strlen(sanitized);
+	if (strlen(str) < starting_len) {
+		sanitize(str);
+	}
 }
 
 /* COMPILATION ============================================================= */
+#ifdef DEBUG
 char instr_strings[12][20] = {
 	"ADD   ",
 	"SUB   ",
@@ -250,6 +186,7 @@ char instr_strings[12][20] = {
 	"END   ",
 	"DCLEAR"
 };
+#endif
 
 typedef struct {
 	enum {
@@ -560,8 +497,6 @@ void compile(char* src)
 	}
 
 	program[ip++].type = INSTR_END;
-	//printf("allocating %lu bytes for %d instructions\n", sizeof(Instruction) * ip, ip);
-	
 	program = bfi_realloc(program, sizeof(Instruction) * ip);
 
 	if (sp)
@@ -644,12 +579,7 @@ int main(int argc, char** argv)
 		fatal_error("could not load file.\n");
 
 	src = remove_comments(src);
-	
-	while (sanitize(src)) {
-		strcpy(src, sanitized);
-		free(sanitized);
-		sanitized = NULL;
-	}
+	sanitize(src);
 
 	compile(src);
 	free(src);
