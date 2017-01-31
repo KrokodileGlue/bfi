@@ -511,8 +511,14 @@ void execute()
 			case INSTR_PUTCH:
 				for (int i = 0; i < program[ip].data; i++)
 					putchar(memory[(unsigned short)(ptr + program[ip].offset)]); break;
-			case INSTR_GETCH:
-				memory[(unsigned short)(ptr + program[ip].offset)] = getchar(); break;
+			case INSTR_GETCH: {
+				char c = getchar();
+				if (c == EOF) {
+					memory[(unsigned short)(ptr + program[ip].offset)] = 0;
+				} else {
+					memory[(unsigned short)(ptr + program[ip].offset)] = c;
+				}
+			} break;
 			case INSTR_CJUMP:
 				if (!memory[ptr])
 					ip = program[ip].data; break;
