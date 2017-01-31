@@ -67,25 +67,6 @@ char* load_file(const char* path)
 	|| c == ',' || c == '.'  \
 	|| c == '[' || c == ']'
 
-char* remove_comments(char* src)
-{
-	char* buf = bfi_malloc(strlen(src) + 1);
-	int buf_index = 0;
-
-	char* c = src;
-	while (*c) {
-		if (IS_BF_COMMAND(*c))
-			buf[buf_index++] = *c;
-		c++;
-	}
-
-	buf[buf_index] = 0;
-	buf = bfi_realloc(buf, strlen(buf) + 1);
-	free(src);
-
-	return buf;
-}
-
 void sanitize(char* str)
 {
 #define SANITIZER_IS_BF_COMMAND(c) (   \
@@ -578,7 +559,6 @@ int main(int argc, char** argv)
 	if (!src)
 		fatal_error("could not load file.\n");
 
-	src = remove_comments(src);
 	sanitize(src);
 
 	compile(src);
